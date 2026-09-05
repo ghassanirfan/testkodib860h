@@ -1,0 +1,66 @@
+name: Build Kodi GLES ARM64
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04-arm
+
+    steps:
+      - name: Prepare build environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            devscripts \
+            dpkg-dev \
+            fakeroot \
+            ca-certificates \
+            git \
+            wget
+
+      - name: Install Kodi build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get build-dep -y kodi
+
+      - name: Add EGL Chromium stub
+        run: |
+          sudo mkdir -p /usr/include/EGL
+          sudo tee /usr/include/EGL/eglextchromium.h > /dev/null <<'EOF'
+          #ifndef EGL_EXT_CHROMIUM_H_
+          #define EGL_EXT_CHROMIUM_H_
+          #include <EGL/egl.h>
+          #include <EGL/eglext.h>
+          typedef khronos_uint64_t EGLuint64CHROMIUM;
+          typedef EGLBoolean (EGLAPIENTRYP PFNEGLGETSYNCVALUESCHROMIUMPROC)(
+              EGLDisplay dpy, EGLSurface surface,
+              EGLuint64CHROMIUM *ust,
+              EGLuint64CHROMIUM *msc,
+              EGLuint64CHROMIUM *sbc);
+          #endif
+          EOF
+
+      - name: Download Kodi source
+        run: |
+          apt-get source kodi
+
+      - name: Configure Kodi for GLES
+        run: |
+          cd kodi-19.4+dfsg1
+          sed -i 's/-DAPP_RENDER_SYSTEM=gl/-DAPP_RENDER_SYSTEM=gles/' debian/rules
+
+          grep -n 'APP_RENDER_SYSTEM' debian/rules
+
+      - name: Build Kodi
+        run: |
+          cd kodi-19.4+dfsg1
+          DEB_BUILD_OPTIONS="nocheck parallel=4" \
+            dpkg-buildpackage -b -uc -us
+
+      - name: Upload Debian packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodi-gles-arm64
+          path: "*.deb"
