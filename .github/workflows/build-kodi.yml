@@ -8,6 +8,10 @@ jobs:
     runs-on: ubuntu-22.04-arm
 
     steps:
+      - name: Enable source repositories
+        run: |
+          sudo sed -i 's/^# deb-src /deb-src /' /etc/apt/sources.list
+          sudo apt-get update
       - name: Prepare build environment
         run: |
           sudo apt-get update
