@@ -5,10 +5,11 @@ on:
 
 jobs:
   build-ffmpeg:
-    name: Build FFmpeg 4.4.2 DRM PRIME
-    runs-on: ubuntu-22.04
+    name: Build FFmpeg 4.4.2 DRM PRIME ARM64
+    runs-on: ubuntu-22.04-arm
 
     steps:
+
       # ============================================================
       # 1. Checkout repository
       # ============================================================
@@ -16,7 +17,34 @@ jobs:
         uses: actions/checkout@v6
 
       # ============================================================
-      # 2. Enable Debian source repositories
+      # 2. Verify runner architecture
+      # ============================================================
+      - name: Verify runner architecture
+        shell: bash
+        run: |
+          set -eux
+
+          echo "=== System ==="
+          uname -a
+
+          echo
+          echo "=== Machine architecture ==="
+          uname -m
+
+          echo
+          echo "=== Debian architecture ==="
+          dpkg --print-architecture
+
+          echo
+          echo "=== CPU ==="
+          nproc
+          lscpu | head -n 25
+
+          test "$(uname -m)" = "aarch64"
+          test "$(dpkg --print-architecture)" = "arm64"
+
+      # ============================================================
+      # 3. Enable Debian source repositories
       # ============================================================
       - name: Enable source repositories
         shell: bash
@@ -35,10 +63,17 @@ jobs:
               /etc/apt/sources.list
           fi
 
+          echo
+          echo "=== Source repositories ==="
+          grep -R "deb-src" \
+            /etc/apt/sources.list \
+            /etc/apt/sources.list.d/ \
+            || true
+
           sudo apt-get update
 
       # ============================================================
-      # 3. Install build dependencies
+      # 4. Install build dependencies
       # ============================================================
       - name: Install build dependencies
         shell: bash
@@ -54,10 +89,11 @@ jobs:
             fakeroot \
             git \
             ca-certificates \
+            curl \
             python3
 
       # ============================================================
-      # 4. Download exact Ubuntu Jammy FFmpeg source
+      # 5. Download exact Ubuntu Jammy FFmpeg source
       # ============================================================
       - name: Download FFmpeg 4.4.2 source
         shell: bash
@@ -65,15 +101,50 @@ jobs:
           set -eux
 
           mkdir -p "$HOME/build"
+
           cd "$HOME/build"
 
           apt-get source ffmpeg=7:4.4.2-0ubuntu0.22.04.1
 
+          echo
+          echo "=== Build directory ==="
           ls -lah
+
           test -d ffmpeg-4.4.2
 
       # ============================================================
-      # 5. Download LibreELEC V4L2 DRM PRIME patch
+      # 6. Verify source version
+      # ============================================================
+      - name: Verify FFmpeg source version
+        shell: bash
+        run: |
+          set -eux
+
+          cd "$HOME/build/ffmpeg-4.4.2"
+
+          echo "=== Debian source version ==="
+          dpkg-parsechangelog \
+            -S Version \
+            -l debian/changelog
+
+          VERSION="$(dpkg-parsechangelog \
+            -S Version \
+            -l debian/changelog)"
+
+          echo "VERSION=$VERSION"
+
+          case "$VERSION" in
+            7:4.4.2-0ubuntu0.22.04.1)
+              echo "Correct FFmpeg Jammy source."
+              ;;
+            *)
+              echo "ERROR: Unexpected FFmpeg version: $VERSION"
+              exit 1
+              ;;
+          esac
+
+      # ============================================================
+      # 7. Download LibreELEC V4L2 DRM PRIME patch
       # ============================================================
       - name: Download V4L2 DRM PRIME patch
         shell: bash
@@ -86,12 +157,24 @@ jobs:
 
           mkdir -p debian/patches
 
-          curl -L \
+          curl -fL \
             -o debian/patches/v4l2-drmprime.patch \
             https://raw.githubusercontent.com/LibreELEC/LibreELEC.tv/libreelec-11.0/packages/multimedia/ffmpeg/patches/v4l2-drmprime/ffmpeg-001-v4l2-drmprime.patch
 
+          echo
+          echo "=== Downloaded patch ==="
+          ls -lh debian/patches/v4l2-drmprime.patch
+
+          test -s debian/patches/v4l2-drmprime.patch
+
           echo "v4l2-drmprime.patch" >> debian/patches/series
 
+          echo
+          echo "=== Patch series ==="
+          cat debian/patches/series
+
+          echo
+          echo "=== Applying patch ==="
           quilt push
 
           echo
@@ -99,9 +182,14 @@ jobs:
           quilt applied
 
       # ============================================================
-      # 6. Force FFmpeg CLI to select DRM_PRIME
+      # 8. Force FFmpeg CLI to select DRM PRIME
       #
-      # This reproduces our manual experiment on the B860H.
+      # IMPORTANT:
+      # This modification affects the ffmpeg CLI diagnostic program.
+      # Kodi itself does NOT use this fftools/ffmpeg.c code.
+      #
+      # The LibreELEC patch above is what adds V4L2 DRM PRIME support
+      # to libavcodec.
       # ============================================================
       - name: Force DRM PRIME in ffmpeg CLI
         shell: bash
@@ -116,49 +204,52 @@ jobs:
           path = Path("fftools/ffmpeg.c")
           text = path.read_text()
 
-          old = """static enum AVPixelFormat get_format(AVCodecContext *s, const enum AVPixelFormat *pix_fmts)
+          needle = """static enum AVPixelFormat get_format(AVCodecContext *s, const enum AVPixelFormat *pix_fmts)
           {
               InputStream *ist = s->opaque;
               const enum AVPixelFormat *p;
               int ret;
           """
 
-          new = """static enum AVPixelFormat get_format(AVCodecContext *s, const enum AVPixelFormat *pix_fmts)
-          {
-              InputStream *ist = s->opaque;
-              const enum AVPixelFormat *p;
-              int ret;
-
-              for (p = pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
-                  if (*p == AV_PIX_FMT_DRM_PRIME) {
-                      av_log(s, AV_LOG_INFO, "TEST: forcing DRM_PRIME\\\\n");
-                      return AV_PIX_FMT_DRM_PRIME;
-                  }
+          insert = """    for (p = pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
+              if (*p == AV_PIX_FMT_DRM_PRIME) {
+                  av_log(s, AV_LOG_INFO, "TEST: forcing DRM_PRIME\\\\n");
+                  return AV_PIX_FMT_DRM_PRIME;
               }
-          """
+          }
 
-          if old not in text:
-              raise SystemExit(
-                  "ERROR: Could not find expected get_format() function body. "
-                  "Refusing to modify ffmpeg.c."
-              )
+          """
 
           if "TEST: forcing DRM_PRIME" in text:
               raise SystemExit(
-                  "ERROR: DRM_PRIME force code already exists. "
-                  "Refusing to insert it twice."
+                  "ERROR: DRM PRIME force code already exists. "
+                  "Refusing to insert twice."
               )
 
-          path.write_text(text.replace(old, new, 1))
+          if needle not in text:
+              raise SystemExit(
+                  "ERROR: Could not find expected get_format() "
+                  "function body. Refusing to modify source."
+              )
+
+          text = text.replace(
+              needle,
+              needle + insert,
+              1
+          )
+
+          path.write_text(text)
           PY
 
           echo
           echo "=== Modified get_format() ==="
-          sed -n '/static enum AVPixelFormat get_format/,/^[}]/p' \
-            fftools/ffmpeg.c | head -n 35
+
+          grep -n -A12 -B5 \
+            'TEST: forcing DRM_PRIME' \
+            fftools/ffmpeg.c
 
       # ============================================================
-      # 7. Verify patch + forced code
+      # 9. Verify DRM PRIME patch + forced code
       # ============================================================
       - name: Verify source modifications
         shell: bash
@@ -172,6 +263,7 @@ jobs:
 
           echo
           echo "=== DRM PRIME references ==="
+
           grep -n -E \
             'DRM_PRIME|drm_prime|v4l2.*drm' \
             libavcodec/v4l2_m2m_dec.c \
@@ -180,14 +272,24 @@ jobs:
 
           echo
           echo "=== Forced DRM PRIME code ==="
+
           grep -n -A8 -B4 \
             'TEST: forcing DRM_PRIME' \
             fftools/ffmpeg.c
 
-          test -n "$(grep -n 'TEST: forcing DRM_PRIME' fftools/ffmpeg.c)"
+          echo
+          echo "=== Sanity checks ==="
+
+          grep -q \
+            'TEST: forcing DRM_PRIME' \
+            fftools/ffmpeg.c
+
+          grep -q \
+            'AV_PIX_FMT_DRM_PRIME' \
+            libavcodec/v4l2_m2m_dec.c
 
       # ============================================================
-      # 8. Build Debian packages
+      # 10. Build Debian packages
       # ============================================================
       - name: Build FFmpeg packages
         shell: bash
@@ -196,7 +298,7 @@ jobs:
 
           cd "$HOME/build/ffmpeg-4.4.2"
 
-          export DEB_BUILD_OPTIONS="parallel=$(nproc)"
+          export DEB_BUILD_OPTIONS="parallel=4"
 
           dpkg-buildpackage \
             -b \
@@ -204,7 +306,48 @@ jobs:
             -us
 
       # ============================================================
-      # 9. Collect useful packages
+      # 11. Verify generated packages are ARM64
+      # ============================================================
+      - name: Verify generated packages
+        shell: bash
+        run: |
+          set -eux
+
+          cd "$HOME/build"
+
+          echo
+          echo "=== Generated Debian packages ==="
+          ls -lh *.deb
+
+          echo
+          echo "=== Package architectures ==="
+
+          for pkg in *.deb; do
+            echo
+            echo "----------------------------------------"
+            echo "$pkg"
+            dpkg-deb -f "$pkg" Package
+            dpkg-deb -f "$pkg" Version
+            dpkg-deb -f "$pkg" Architecture
+          done
+
+          echo
+          echo "=== Checking architectures ==="
+
+          for pkg in *.deb; do
+            ARCH="$(dpkg-deb -f "$pkg" Architecture)"
+
+            if [ "$ARCH" != "arm64" ]; then
+              echo "ERROR: $pkg is $ARCH, expected arm64"
+              exit 1
+            fi
+          done
+
+          echo
+          echo "ALL PACKAGES ARE ARM64."
+
+      # ============================================================
+      # 12. Collect packages
       # ============================================================
       - name: Collect build artifacts
         shell: bash
@@ -215,14 +358,11 @@ jobs:
 
           cd "$HOME/build"
 
-          echo "=== Generated Debian packages ==="
-          ls -lah *.deb
+          echo "=== Collecting FFmpeg packages ==="
 
-          # Main FFmpeg executable
           cp -v ffmpeg_*.deb \
             "$GITHUB_WORKSPACE/artifacts/"
 
-          # Runtime FFmpeg libraries required by the patched binary
           cp -v libavcodec58_*.deb \
             "$GITHUB_WORKSPACE/artifacts/"
 
@@ -252,9 +392,9 @@ jobs:
           ls -lah "$GITHUB_WORKSPACE/artifacts"
 
       # ============================================================
-      # 10. Upload packages
+      # 13. Upload packages
       # ============================================================
-      - name: Upload FFmpeg DRM PRIME packages
+      - name: Upload FFmpeg DRM PRIME ARM64 packages
         uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-4.4.2-drmprime-forced-arm64
