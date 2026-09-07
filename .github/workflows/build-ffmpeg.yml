@@ -24,24 +24,34 @@ jobs:
         run: |
           set -eux
 
-          echo "=== System ==="
+          echo "========================================"
+          echo " SYSTEM INFORMATION"
+          echo "========================================"
+
           uname -a
 
           echo
-          echo "=== Machine architecture ==="
+          echo "Machine:"
           uname -m
 
           echo
-          echo "=== Debian architecture ==="
+          echo "Debian architecture:"
           dpkg --print-architecture
 
           echo
-          echo "=== CPU ==="
+          echo "CPU:"
           nproc
-          lscpu | head -n 25
+
+          echo
+          echo "========================================"
+          echo " VERIFYING ARM64"
+          echo "========================================"
 
           test "$(uname -m)" = "aarch64"
           test "$(dpkg --print-architecture)" = "arm64"
+
+          echo
+          echo "Runner is confirmed ARM64."
 
       # ============================================================
       # 3. Enable Debian source repositories
@@ -64,7 +74,10 @@ jobs:
           fi
 
           echo
-          echo "=== Source repositories ==="
+          echo "========================================"
+          echo " SOURCE REPOSITORIES"
+          echo "========================================"
+
           grep -R "deb-src" \
             /etc/apt/sources.list \
             /etc/apt/sources.list.d/ \
@@ -107,13 +120,16 @@ jobs:
           apt-get source ffmpeg=7:4.4.2-0ubuntu0.22.04.1
 
           echo
-          echo "=== Build directory ==="
+          echo "========================================"
+          echo " DOWNLOADED SOURCE"
+          echo "========================================"
+
           ls -lah
 
           test -d ffmpeg-4.4.2
 
       # ============================================================
-      # 6. Verify source version
+      # 6. Verify exact FFmpeg source version
       # ============================================================
       - name: Verify FFmpeg source version
         shell: bash
@@ -122,26 +138,18 @@ jobs:
 
           cd "$HOME/build/ffmpeg-4.4.2"
 
-          echo "=== Debian source version ==="
-          dpkg-parsechangelog \
-            -S Version \
-            -l debian/changelog
-
           VERSION="$(dpkg-parsechangelog \
             -S Version \
             -l debian/changelog)"
 
-          echo "VERSION=$VERSION"
+          echo
+          echo "FFmpeg source version:"
+          echo "$VERSION"
 
-          case "$VERSION" in
-            7:4.4.2-0ubuntu0.22.04.1)
-              echo "Correct FFmpeg Jammy source."
-              ;;
-            *)
-              echo "ERROR: Unexpected FFmpeg version: $VERSION"
-              exit 1
-              ;;
-          esac
+          test "$VERSION" = "7:4.4.2-0ubuntu0.22.04.1"
+
+          echo
+          echo "Correct Ubuntu Jammy FFmpeg source."
 
       # ============================================================
       # 7. Download LibreELEC V4L2 DRM PRIME patch
@@ -162,7 +170,10 @@ jobs:
             https://raw.githubusercontent.com/LibreELEC/LibreELEC.tv/libreelec-11.0/packages/multimedia/ffmpeg/patches/v4l2-drmprime/ffmpeg-001-v4l2-drmprime.patch
 
           echo
-          echo "=== Downloaded patch ==="
+          echo "========================================"
+          echo " DRM PRIME PATCH"
+          echo "========================================"
+
           ls -lh debian/patches/v4l2-drmprime.patch
 
           test -s debian/patches/v4l2-drmprime.patch
@@ -170,26 +181,27 @@ jobs:
           echo "v4l2-drmprime.patch" >> debian/patches/series
 
           echo
-          echo "=== Patch series ==="
+          echo "Patch series:"
           cat debian/patches/series
 
           echo
-          echo "=== Applying patch ==="
+          echo "Applying patch..."
+
           quilt push
 
           echo
-          echo "=== Applied patches ==="
+          echo "Applied patches:"
           quilt applied
 
       # ============================================================
       # 8. Force FFmpeg CLI to select DRM PRIME
       #
-      # IMPORTANT:
-      # This modification affects the ffmpeg CLI diagnostic program.
-      # Kodi itself does NOT use this fftools/ffmpeg.c code.
+      # This modification is ONLY for the standalone ffmpeg CLI.
       #
-      # The LibreELEC patch above is what adds V4L2 DRM PRIME support
-      # to libavcodec.
+      # Kodi does not use fftools/ffmpeg.c.
+      #
+      # The actual Kodi/V4L2 DRM PRIME capability comes from the
+      # LibreELEC patch applied above.
       # ============================================================
       - name: Force DRM PRIME in ffmpeg CLI
         shell: bash
@@ -242,14 +254,16 @@ jobs:
           PY
 
           echo
-          echo "=== Modified get_format() ==="
+          echo "========================================"
+          echo " FORCED DRM PRIME CODE"
+          echo "========================================"
 
-          grep -n -A12 -B5 \
-            'TEST: forcing DRM_PRIME' \
+          grep -n -A10 -B4 \
+            "TEST: forcing DRM_PRIME" \
             fftools/ffmpeg.c
 
       # ============================================================
-      # 9. Verify DRM PRIME patch + forced code
+      # 9. Verify source modifications
       # ============================================================
       - name: Verify source modifications
         shell: bash
@@ -258,35 +272,48 @@ jobs:
 
           cd "$HOME/build/ffmpeg-4.4.2"
 
-          echo "=== Quilt status ==="
+          echo
+          echo "========================================"
+          echo " APPLIED PATCHES"
+          echo "========================================"
+
           quilt applied
 
           echo
-          echo "=== DRM PRIME references ==="
+          echo "========================================"
+          echo " V4L2 DRM PRIME REFERENCES"
+          echo "========================================"
 
           grep -n -E \
-            'DRM_PRIME|drm_prime|v4l2.*drm' \
+            "DRM_PRIME|drm_prime|v4l2.*drm" \
             libavcodec/v4l2_m2m_dec.c \
             libavcodec/v4l2_context.c \
             libavcodec/v4l2_buffers.c
 
           echo
-          echo "=== Forced DRM PRIME code ==="
+          echo "========================================"
+          echo " FORCED DRM PRIME"
+          echo "========================================"
 
           grep -n -A8 -B4 \
-            'TEST: forcing DRM_PRIME' \
+            "TEST: forcing DRM_PRIME" \
             fftools/ffmpeg.c
 
           echo
-          echo "=== Sanity checks ==="
+          echo "========================================"
+          echo " SANITY CHECKS"
+          echo "========================================"
 
           grep -q \
-            'TEST: forcing DRM_PRIME' \
+            "TEST: forcing DRM_PRIME" \
             fftools/ffmpeg.c
 
           grep -q \
-            'AV_PIX_FMT_DRM_PRIME' \
+            "AV_PIX_FMT_DRM_PRIME" \
             libavcodec/v4l2_m2m_dec.c
+
+          echo
+          echo "Source modifications verified."
 
       # ============================================================
       # 10. Build Debian packages
@@ -300,13 +327,23 @@ jobs:
 
           export DEB_BUILD_OPTIONS="parallel=4"
 
+          echo
+          echo "========================================"
+          echo " BUILDING FFmpeg"
+          echo "========================================"
+
           dpkg-buildpackage \
             -b \
             -uc \
             -us
 
       # ============================================================
-      # 11. Verify generated packages are ARM64
+      # 11. Verify generated Debian packages
+      #
+      # Native packages MUST be arm64.
+      #
+      # Documentation/data packages may be "all".
+      # Those are architecture-independent and are OK.
       # ============================================================
       - name: Verify generated packages
         shell: bash
@@ -316,40 +353,71 @@ jobs:
           cd "$HOME/build"
 
           echo
-          echo "=== Generated Debian packages ==="
+          echo "========================================"
+          echo " GENERATED PACKAGES"
+          echo "========================================"
+
           ls -lh *.deb
 
           echo
-          echo "=== Package architectures ==="
+          echo "========================================"
+          echo " PACKAGE ARCHITECTURES"
+          echo "========================================"
 
           for pkg in *.deb; do
-            echo
-            echo "----------------------------------------"
-            echo "$pkg"
-            dpkg-deb -f "$pkg" Package
-            dpkg-deb -f "$pkg" Version
-            dpkg-deb -f "$pkg" Architecture
-          done
 
-          echo
-          echo "=== Checking architectures ==="
-
-          for pkg in *.deb; do
+            PACKAGE="$(dpkg-deb -f "$pkg" Package)"
+            VERSION="$(dpkg-deb -f "$pkg" Version)"
             ARCH="$(dpkg-deb -f "$pkg" Architecture)"
 
-            if [ "$ARCH" != "arm64" ]; then
-              echo "ERROR: $pkg is $ARCH, expected arm64"
-              exit 1
-            fi
+            echo
+            echo "----------------------------------------"
+            echo "File:         $pkg"
+            echo "Package:      $PACKAGE"
+            echo "Version:      $VERSION"
+            echo "Architecture: $ARCH"
+
           done
 
           echo
-          echo "ALL PACKAGES ARE ARM64."
+          echo "========================================"
+          echo " VERIFYING ARCHITECTURES"
+          echo "========================================"
+
+          for pkg in *.deb; do
+
+            PACKAGE="$(dpkg-deb -f "$pkg" Package)"
+            ARCH="$(dpkg-deb -f "$pkg" Architecture)"
+
+            if [ "$ARCH" = "all" ]; then
+              echo "OK: $PACKAGE is architecture-independent."
+              continue
+            fi
+
+            if [ "$ARCH" != "arm64" ]; then
+              echo
+              echo "ERROR:"
+              echo "$pkg"
+              echo "Architecture = $ARCH"
+              echo "Expected      = arm64"
+              exit 1
+            fi
+
+            echo "OK: $PACKAGE is arm64."
+
+          done
+
+          echo
+          echo "========================================"
+          echo " ARCHITECTURE CHECK PASSED"
+          echo "========================================"
 
       # ============================================================
-      # 12. Collect packages
+      # 12. Collect ONLY packages required for ARM64 test
+      #
+      # ffmpeg-doc is intentionally excluded.
       # ============================================================
-      - name: Collect build artifacts
+      - name: Collect required ARM64 packages
         shell: bash
         run: |
           set -eux
@@ -358,41 +426,76 @@ jobs:
 
           cd "$HOME/build"
 
-          echo "=== Collecting FFmpeg packages ==="
+          echo
+          echo "========================================"
+          echo " COLLECTING PACKAGES"
+          echo "========================================"
 
-          cp -v ffmpeg_*.deb \
-            "$GITHUB_WORKSPACE/artifacts/"
+          for pkg in \
+            ffmpeg_*.deb \
+            libavcodec58_*.deb \
+            libavdevice58_*.deb \
+            libavfilter7_*.deb \
+            libavformat58_*.deb \
+            libavutil56_*.deb \
+            libpostproc55_*.deb \
+            libswresample3_*.deb \
+            libswscale5_*.deb
+          do
 
-          cp -v libavcodec58_*.deb \
-            "$GITHUB_WORKSPACE/artifacts/"
+            ARCH="$(dpkg-deb -f "$pkg" Architecture)"
 
-          cp -v libavdevice58_*.deb \
-            "$GITHUB_WORKSPACE/artifacts/"
+            if [ "$ARCH" != "arm64" ]; then
+              echo
+              echo "ERROR:"
+              echo "$pkg is $ARCH"
+              echo "Required package must be arm64."
+              exit 1
+            fi
 
-          cp -v libavfilter7_*.deb \
-            "$GITHUB_WORKSPACE/artifacts/"
+            cp -v \
+              "$pkg" \
+              "$GITHUB_WORKSPACE/artifacts/"
 
-          cp -v libavformat58_*.deb \
-            "$GITHUB_WORKSPACE/artifacts/"
-
-          cp -v libavutil56_*.deb \
-            "$GITHUB_WORKSPACE/artifacts/"
-
-          cp -v libpostproc55_*.deb \
-            "$GITHUB_WORKSPACE/artifacts/"
-
-          cp -v libswresample3_*.deb \
-            "$GITHUB_WORKSPACE/artifacts/"
-
-          cp -v libswscale5_*.deb \
-            "$GITHUB_WORKSPACE/artifacts/"
+          done
 
           echo
-          echo "=== Artifact directory ==="
+          echo "========================================"
+          echo " FINAL ARTIFACT"
+          echo "========================================"
+
           ls -lah "$GITHUB_WORKSPACE/artifacts"
 
       # ============================================================
-      # 13. Upload packages
+      # 13. Final artifact architecture verification
+      # ============================================================
+      - name: Verify final artifact
+        shell: bash
+        run: |
+          set -eux
+
+          cd "$GITHUB_WORKSPACE/artifacts"
+
+          echo
+          echo "========================================"
+          echo " FINAL ARM64 PACKAGE CHECK"
+          echo "========================================"
+
+          for pkg in *.deb; do
+
+            ARCH="$(dpkg-deb -f "$pkg" Architecture)"
+
+            echo "$pkg -> $ARCH"
+
+            test "$ARCH" = "arm64"
+
+          done
+
+          echo
+          echo "ALL FINAL PACKAGES ARE ARM64."
+
+      # ============================================================
+      # 14. Upload artifact
       # ============================================================
       - name: Upload FFmpeg DRM PRIME ARM64 packages
         uses: actions/upload-artifact@v4
