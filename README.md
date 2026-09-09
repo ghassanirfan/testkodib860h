@@ -2,4 +2,7 @@ KODI 19 MATRIX
 PATCH DRM PRIME B860H
 
 GBM -> Works
+
+
+
 X11 -> Not Detected
